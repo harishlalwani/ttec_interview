@@ -1,0 +1,155 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Resources:
+  LambdaExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: 'Allow'
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: 'ConnectLambdaPolicy'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: 'Allow'
+                Action:
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                Resource: 'arn:aws:logs:*:*:*'
+              - Effect: 'Allow'
+                Action:
+                  - 'connect:CreateContactFlow'
+                  - 'connect:DeleteContactFlow'
+                  - "s3:PutObject"
+                  - "s3:PutObjectAcl"
+                  - "s3:PutObjectTagging"
+                  - "s3:PutObjectVersionAcl"
+                  - "s3:PutObjectVersionTagging"
+                  - "dynamodb:BatchGet*",
+                  - "dynamodb:DescribeStream",
+                  - "dynamodb:DescribeTable",
+                  - "dynamodb:Get*",
+                  - "dynamodb:Query",
+                  - "dynamodb:Scan",
+                  - "dynamodb:CreateTable",
+                  - "dynamodb:Delete*",
+                  - "dynamodb:Update*",
+                  - "dynamodb:PutItem"
+                Resource: '*'
+  DynamoDBTable:
+    Type: 'AWS::DynamoDB::Table'
+    Properties:
+      TableName: 'VanityNumbersTable'
+      AttributeDefinitions:
+        - AttributeName: phoneNumber
+          AttributeType: S
+        - AttributeName: vanityNumbers
+          AttributeType: S
+      KeySchema:
+        - AttributeName: phoneNumber
+          KeyType: HASH
+        - AttributeName: vanityNumbers
+          KeyType: RANGE
+      ProvisionedThroughput:
+        ReadCapacityUnits: 5
+        WriteCapacityUnits: 5
+  CustomResourceVanityFunctionLambda:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Handler: index.handler
+      Runtime: nodejs20.x
+      Code:
+        ZipFile: |
+              const { DynamoDBClient } = require("@aws-sdk/client-dynamodb";);
+              const { PutCommand, DynamoDBDocumentClient   } = require("@aws-sdk/lib-dynamodb");
+
+              const client = new DynamoDBClient({});
+              const docClient = DynamoDBDocumentClient.from(client);
+
+
+              // Digit to letter mapping based on phone keypad
+              const KEYPAD = {
+                  '2': 'ABC', '3': 'DEF', '4': 'GHI', '5': 'JKL', '6': 'MNO',
+                  '7': 'PQRS', '8': 'TUV', '9': 'WXYZ', '0': '0', '1': '1'
+              };
+
+              // Function to get all letter combinations for a phone number
+              const getVanityCombinations = (phoneNumber) => {
+                  const digits = phoneNumber.split('');
+                  const combinations = digits.reduce((acc, digit) => {
+                      const letters = KEYPAD[digit];
+                      if (!letters) return acc;
+                      const newAcc = [];
+                      for (const combo of acc) {
+                          for (const letter of letters) {
+                              newAcc.push(combo + letter);
+                          }
+                      }
+                      return newAcc;
+                  }, ['']);
+                  return combinations;
+              };
+
+              // Function to evaluate and select the best vanity numbers
+              const selectBestVanityNumbers = (combinations) => {
+                  // Simple criteria for "best": first 5 unique combinations
+                  const uniqueCombinations = [...new Set(combinations)];
+                  return uniqueCombinations.slice(0, 5);
+              };
+
+              // Lambda handler
+              export const handler = async (event, context , callback) => {
+                  const phoneNumber = event.Details.Parameters.phoneNumber;
+                  console.log(event, 'phoneNumber');
+                  // Validate phone number
+                  if (!phoneNumber || !/^\d+$/.test(phoneNumber)) {
+                      return {
+                          statusCode: 400,
+                          body: JSON.stringify({ error: 'Invalid phone number' })
+                      };
+                  }
+
+                  // Get vanity combinations
+                  const combinations = getVanityCombinations(phoneNumber);
+
+                  // Select the best vanity numbers
+                  const bestVanityNumbers = selectBestVanityNumbers(combinations);
+
+                  // Save to DynamoDB
+                  
+                  const command = new PutCommand({
+                      TableName: 'VanityNumbers',
+                      Item: {
+                          phoneNumber: phoneNumber,
+                          vanityNumbers: bestVanityNumbers
+                      }
+                  });
+
+
+                  try {
+                      const response = await docClient.send(command);
+                      console.log(response);
+                      return { vanityNumbers: bestVanityNumbers };
+                      
+                  } catch (error) {
+                      return {
+                          statusCode: 500,
+                          body: JSON.stringify({ error: error.message })
+                      };
+                  }
+              };
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 300
+
+Outputs:
+  VanityNumberLambdaArn:
+    Description: 'ARN of the DynamoDB Table '
+    Value: !GetAtt DynamoDBTable.Arn
+  CustomResourceLambdaArn:
+    Description: 'ARN of the Custom Resource Lambda Function'
+    Value: !GetAtt CustomResourceLambda.Arn

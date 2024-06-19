@@ -1,0 +1,184 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Resources:
+  LambdaExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: 'Allow'
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: 'ConnectLambdaPolicy'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: 'Allow'
+                Action:
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                Resource: 'arn:aws:logs:*:*:*'
+              - Effect: 'Allow'
+                Action:
+                  - 'connect:CreateContactFlow'
+                  - 'connect:DeleteContactFlow'
+                  - "s3:PutObject"
+                  - "s3:PutObjectAcl"
+                  - "s3:PutObjectTagging"
+                  - "s3:PutObjectVersionAcl"
+                  - "s3:PutObjectVersionTagging"
+                  - "dynamodb:BatchGet*",
+                  - "dynamodb:DescribeStream",
+                  - "dynamodb:DescribeTable",
+                  - "dynamodb:Get*",
+                  - "dynamodb:Query",
+                  - "dynamodb:Scan",
+                  - "dynamodb:CreateTable",
+                  - "dynamodb:Delete*",
+                  - "dynamodb:Update*",
+                  - "dynamodb:PutItem"
+                Resource: '*'
+  CustomResourceLambda:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Handler: index.handler
+      Runtime: nodejs20.x
+      Code:
+        ZipFile: |
+              const connect = require("@aws-sdk/client-connect");
+              const { ConnectClient, CreateContactFlowCommand, DeleteContactFlowCommand   } = require("@aws-sdk/client-connect");
+              const client = new ConnectClient({});
+
+              exports.handler = async function(event, context , callback) {
+                const requestType = event.RequestType;
+                const instanceId = event.ResourceProperties.InstanceId;
+                
+                console.log(event, 'event')
+                let responseData = {};
+                let physicalResourceId;
+
+                const contactFlowContent = JSON.stringify({
+                  "Version": "2019-10-30",
+                  "StartAction": "7eefafd6-402f-4759-967c-b017ef5f3969",
+                  "Actions": [
+                    {
+                      "Parameters": {
+                        "LambdaFunctionARN": <arn number of previous lambda function>,
+                        "InvocationTimeLimitSeconds": "4",
+                        "LambdaInvocationAttributes": {
+                          "phoneNumber": "180012345656"
+                        },
+                        "ResponseValidation": {
+                          "ResponseType": "JSON"
+                        }
+                      },
+                      "Identifier": "7eefafd6-402f-4759-967c-b017ef5f3969",
+                      "Type": "InvokeLambdaFunction",
+                      "Transitions": {
+                        "NextAction": "55edc038-21ed-4de4-b353-f2ded0768a81",
+                        "Errors": [
+                          {
+                            "NextAction": "be86f82d-270b-4bb2-af0b-18ebdd0daa8d",
+                            "ErrorType": "NoMatchingError"
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "Parameters": {},
+                      "Identifier": "47c101c0-47a5-45b6-be29-f3ea28a3be2d",
+                      "Type": "DisconnectParticipant",
+                      "Transitions": {}
+                    },
+                    {
+                      "Parameters": {},
+                      "Identifier": "be86f82d-270b-4bb2-af0b-18ebdd0daa8d",
+                      "Type": "DisconnectParticipant",
+                      "Transitions": {}
+                    },
+                    {
+                      "Parameters": {
+                        "Attributes": {
+                          "vanityNumbers": "$.External.vanityNumbers"
+                        },
+                        "TargetContact": "Current"
+                      },
+                      "Identifier": "55edc038-21ed-4de4-b353-f2ded0768a81",
+                      "Type": "UpdateContactAttributes",
+                      "Transitions": {
+                        "NextAction": "4d36a741-bc87-4035-b3fa-9c8390e687ac",
+                        "Errors": [
+                          {
+                            "NextAction": "be86f82d-270b-4bb2-af0b-18ebdd0daa8d",
+                            "ErrorType": "NoMatchingError"
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "Parameters": {
+                        "Text": "Your vanity numbers are: $.Attributes.vanityNumbers[0], $.Attributes.vanityNumbers[1], $.Attributes.vanityNumbers[2]\n"
+                      },
+                      "Identifier": "4d36a741-bc87-4035-b3fa-9c8390e687ac",
+                      "Type": "MessageParticipant",
+                      "Transitions": {
+                        "NextAction": "47c101c0-47a5-45b6-be29-f3ea28a3be2d",
+                        "Errors": [
+                          {
+                            "NextAction": "be86f82d-270b-4bb2-af0b-18ebdd0daa8d",
+                            "ErrorType": "NoMatchingError"
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                });
+                try {
+                  if (requestType === 'Create') {
+                    const contactFlowName = event.ResourceProperties.ContactFlowName;
+                    const lambdaArn = event.ResourceProperties.LambdaArn;
+                    const input = {
+                      InstanceId: instanceId,
+                      Name: contactFlowName,
+                      Type: 'CONTACT_FLOW',
+                      Content: contactFlowContent
+                    }
+                    const command = new CreateContactFlowCommand(input);
+                    const response = await client.send(command);
+                    console.log('responseData', response);
+                    return response;
+                  } 
+                  else if (requestType === 'Delete') {
+                    const contactFlowId = event.ResourceProperties.ContactFlowId;
+                    const command = new DeleteContactFlowCommand({
+                        InstanceId: instanceId,
+                        ContactFlowId: contactFlowId
+                    });
+                    const response = await client.send(command);
+                    console.log('responseData', response); 
+                    return response;
+                  }
+
+                
+                } catch (error) {
+                  console.log(error);
+                  
+                  return {
+                      statusCode: 400,
+                      body: JSON.stringify({ Error: error.message })
+                  };
+                }
+              };
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 300
+
+Outputs:
+  VanityNumberLambdaArn:
+    Description: 'ARN of the DynamoDB Table '
+    Value: !GetAtt DynamoDBTable.Arn
+  CustomResourceLambdaArn:
+    Description: 'ARN of the Custom Resource Lambda Function'
+    Value: !GetAtt CustomResourceLambda.Arn
