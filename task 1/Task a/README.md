@@ -24,5 +24,3 @@ Test Data
 }
 
 
-Limitations
-- Amazon Connect Instance Creation is manual Step

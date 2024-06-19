@@ -1,6 +1,5 @@
-# This project is solution for bonus task number 2.
-Create
-a <https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/templatecustom-resources.html> custom resource for CloudFormation] that will allow you to
+# This project is solution for bonus task number 2c.
+Create a <https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/templatecustom-resources.html> custom resource for CloudFormation] that will allow you to
 publish the contact flow to a Connect instance with the appropriate Lambda ARN
 already in the contact flow so that there is no manual configuration of the flow
 
